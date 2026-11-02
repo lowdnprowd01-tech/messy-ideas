@@ -1,0 +1,64 @@
+name: ad-agent
+
+on:
+  schedule:
+    - cron: "0 8 * * *"        # daily: sync, learn, plan, post the first pin
+    - cron: "15 10-20 * * *"   # hourly: release the remaining pins, spaced out
+  workflow_dispatch:           # lets you press "Run workflow" by hand
+
+concurrency:
+  group: ad-agent
+  cancel-in-progress: false
+
+permissions:
+  contents: write              # lets the agent save its memory (data/*.json) back to the repo
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install ffmpeg and fonts
+        run: sudo apt-get update -y && sudo apt-get install -y ffmpeg fonts-dejavu-core
+      - run: pip install -r requirements.txt
+      - name: Run agent
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GUMROAD_TOKEN: ${{ secrets.GUMROAD_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          PINTEREST_TOKEN: ${{ secrets.PINTEREST_TOKEN }}
+          PINTEREST_BOARD_ID: ${{ secrets.PINTEREST_BOARD_ID }}
+          BLUESKY_HANDLE: ${{ secrets.BLUESKY_HANDLE }}
+          BLUESKY_APP_PASSWORD: ${{ secrets.BLUESKY_APP_PASSWORD }}
+          MASTODON_URL: ${{ secrets.MASTODON_URL }}
+          MASTODON_TOKEN: ${{ secrets.MASTODON_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Safe by default: nothing posts until you set the repo variable LIVE = 1
+          DRY_RUN: ${{ vars.LIVE == '1' && 'no' || 'yes' }}
+        run: |
+          if [ "${{ github.event.schedule }}" = "15 10-20 * * *" ]; then
+            python ad_agent.py post --auto
+          else
+            python ad_agent.py run --auto
+          fi
+      - name: Save agent memory
+        if: always()
+        run: |
+          git config user.name "ad-agent"
+          git config user.email "ad-agent@users.noreply.github.com"
+          git add data/*.json data/*.md 2>/dev/null || true
+          git diff --cached --quiet || (git commit -m "agent state" && git push)
+      - name: Keep rendered videos
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: videos
+          path: data/videos
+          if-no-files-found: ignore
+          retention-days: 14
